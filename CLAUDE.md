@@ -12,7 +12,7 @@ The data flow it automates:
 
 1. A student records their work with the Provenance recorder → a sealed submission bundle ZIP (`manifest.json` + `manifest.sig` + `.slog`/`.slog.meta`).
 2. The student uploads that ZIP to Gradescope, which **auto-extracts it on upload** (so Gradescope stores the loose bundle file tree, not the `.zip`).
-3. `provgate`, hourly, pulls each configured assignment's **native Gradescope bulk export** (`…/assignments/{aid}/export/without_evaluations`) — already in the exact shape Provenance's `ingest:gradescope` endpoint expects.
+3. `provgate`, hourly, pulls each configured assignment's **native Gradescope bulk export** via an async create → poll → download flow (`POST …/assignments/{aid}/export` creates a `generated_file_id`; `GET …/generated_files/{id}.json` is polled until `status: "completed"`; the response's presigned S3 `url` is then downloaded) — already in the exact shape Provenance's `ingest:gradescope` endpoint expects.
 4. It forwards only the *new* submissions (delta) to `POST /semesters/{id}/ingest:gradescope`, polls the returned job to a terminal state, and advances a per-assignment watermark.
 
 **This repo never changes the Provenance monorepo.** Everything here talks to Provenance over its documented HTTP API only.
@@ -99,8 +99,8 @@ Pruning logic is a pure function `prune_export(zip_bytes, already_forwarded: set
 - **Advancing the watermark on failure.** Only advance after a terminal `succeeded`/`partial` job. A crash mid-poll must not lose submissions.
 - **Secrets leaking.** Passwords/tokens must never appear in argv (CLI reads them from stdin/prompt/env, not flags), logs, exception messages, `runs` audit rows, or committed fixtures. Redact `Authorization`/`Cookie` headers before logging any request.
 - **Gradescope export shape drift.** The export is undocumented. Validate that a downloaded export actually contains `submission_metadata.yml` before treating it as one; surface a clear error otherwise. Never assume the top-level folder name.
-- **Large / async exports.** For big assignments Gradescope may return a "preparing" redirect rather than the ZIP immediately. The export download must handle poll/redirect, not assume a synchronous body.
-- **Login lockout / rate limits.** Per-class credentials mean many logins per pass. Reuse a session per class within a pass; back off on 429/auth errors; never hammer.
+- **Large / async exports.** Gradescope always builds the bulk export asynchronously: creating it returns a `generated_file_id`, not a ZIP. The client must poll `generated_files/{id}.json` until `status: "completed"` (raising on any other terminal status, and on a poll timeout) before downloading the presigned URL it returns — never assume a synchronous body.
+- **Login lockout / rate limits.** Per-class credentials mean many logins per pass. Reuse a session per class within a pass (login once, `close()` it in a `finally`). The client does not retry or back off in place — a failed login, a non-200, or an error status raises `GradescopeError` immediately; `sync_class` catches that at the class boundary, records an `error` outcome, and moves on to the next class rather than hammering the failing one.
 - **Cross-class isolation.** One class's Gradescope outage or bad credential must not abort the sync for other classes. Each class is a try/except island with its own `runs` row.
 - **Idempotent runs.** Re-running `sync` after a partial failure must be safe and must not double-forward already-succeeded submissions.
 
@@ -109,7 +109,7 @@ Pruning logic is a pure function `prune_export(zip_bytes, already_forwarded: set
 - Modifying the Provenance monorepo. This tool is an API client; if it seems to need a server change, stop and ask.
 - Reimplementing Provenance analysis, dedup, roster, or bundle parsing. Provenance owns all of that.
 - Downloading or storing student source for any purpose other than immediate forwarding. The pruned export is streamed to Provenance and not retained beyond the run.
-- Scraping grades, rubrics, or annotations. We fetch `export/without_evaluations` (raw submissions) only.
+- Scraping grades, rubrics, or annotations. We fetch the raw bulk submission export only, not any evaluation/grade export Gradescope also offers.
 - Persisting secrets in plaintext, in a config file, or in git.
 - A heavyweight scheduler or job queue. The sync is a one-shot `provgate sync --all` invoked by an external scheduler; a `--loop` mode is a thin convenience, not an orchestration framework.
 
