@@ -34,6 +34,30 @@ class JobStatus:
     def is_success(self) -> bool:
         return self.status in _SUCCESS
 
+    @property
+    def skipped_counts(self) -> tuple[tuple[str, int], ...]:
+        """Excluded/failed scopes from this ingest, aggregated reason -> count.
+
+        The server reports `skipped: null` to mean "not known yet" and `[]` to
+        mean "resolution ran and skipped nothing". Both collapse to `()` here:
+        the distinction matters to a polling client, and `poll_job` only ever
+        returns a TERMINAL status, by which point `null` is not expected.
+
+        Anything malformed is ignored rather than raising — a summary line must
+        never be the thing that fails a sync that otherwise succeeded.
+        """
+        raw_skipped = self.raw.get("skipped")
+        if not isinstance(raw_skipped, list):
+            return ()
+        counts: dict[str, int] = {}
+        for entry in raw_skipped:
+            if not isinstance(entry, dict):
+                continue
+            reason = entry.get("reason")
+            if isinstance(reason, str):
+                counts[reason] = counts.get(reason, 0) + 1
+        return tuple(sorted(counts.items()))
+
 
 @dataclass(frozen=True)
 class _ResumableUpload:

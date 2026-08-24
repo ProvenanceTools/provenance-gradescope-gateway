@@ -4,7 +4,7 @@ import httpx
 import pytest
 import respx
 
-from provgate.provenance.client import ProvenanceClient, ProvenanceError
+from provgate.provenance.client import JobStatus, ProvenanceClient, ProvenanceError
 
 BASE = "https://prov.example.edu/api/v1"
 
@@ -320,3 +320,34 @@ def test_create_upload_failure_raises_without_abort() -> None:
 
     # No upload was created, so nothing to abort.
     assert not abort.called
+
+
+def test_skipped_counts_aggregates_by_reason() -> None:
+    status = JobStatus(
+        status="succeeded",
+        raw={
+            "status": "succeeded",
+            "skipped": [
+                {"folder_key": "a", "scope_path": "lab5/", "reason": "scope_excluded"},
+                {"folder_key": "b", "scope_path": "lab5/", "reason": "scope_excluded"},
+                {"folder_key": "c", "scope_path": "", "reason": "submission_type_mismatch"},
+            ],
+        },
+    )
+    assert status.skipped_counts == (
+        ("scope_excluded", 2),
+        ("submission_type_mismatch", 1),
+    )
+
+
+def test_skipped_counts_is_empty_when_null_or_absent() -> None:
+    assert JobStatus(status="succeeded", raw={"skipped": None}).skipped_counts == ()
+    assert JobStatus(status="succeeded", raw={}).skipped_counts == ()
+
+
+def test_skipped_counts_ignores_malformed_entries() -> None:
+    status = JobStatus(
+        status="succeeded",
+        raw={"skipped": ["not-a-dict", {"no_reason": 1}, {"reason": "no_seal"}]},
+    )
+    assert status.skipped_counts == (("no_seal", 1),)
