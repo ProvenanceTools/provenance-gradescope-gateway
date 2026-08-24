@@ -9,6 +9,7 @@ from typing import Protocol
 
 from provgate.gradescope.parse import Assignment
 from provgate.provenance.client import JobHandle, JobStatus
+from provgate.store.models import IngestScope
 
 
 class GradescopePort(Protocol):
@@ -24,6 +25,12 @@ GradescopeLogin = Callable[[str, str], GradescopePort]
 
 class ProvenancePort(Protocol):
     def ingest_gradescope_export(
-        self, base_url: str, token: str, semester_id: str, zip_bytes: bytes
+        self,
+        base_url: str,
+        token: str,
+        semester_id: str,
+        zip_bytes: bytes,
+        *,
+        scope: IngestScope | None = None,
     ) -> JobHandle: ...
     def poll_job(self, base_url: str, token: str, semester_id: str, job_id: str) -> JobStatus: ...

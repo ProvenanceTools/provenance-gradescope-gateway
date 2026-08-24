@@ -5,6 +5,7 @@ import pytest
 import respx
 
 from provgate.provenance.client import JobStatus, ProvenanceClient, ProvenanceError
+from provgate.store.models import IngestScope
 
 BASE = "https://prov.example.edu/api/v1"
 
@@ -351,3 +352,104 @@ def test_skipped_counts_ignores_malformed_entries() -> None:
         raw={"skipped": ["not-a-dict", {"no_reason": 1}, {"reason": "no_seal"}]},
     )
     assert status.skipped_counts == (("no_seal", 1),)
+
+
+@respx.mock
+def test_single_upload_sends_no_scope_params_when_unmapped() -> None:
+    route = respx.post("https://p.test/semesters/sem1/ingest:gradescope").mock(
+        return_value=httpx.Response(202, json={"job_id": "j1"})
+    )
+    client = ProvenanceClient(httpx.Client())
+    client.ingest_gradescope_export("https://p.test", "tok", "sem1", b"zip")
+    assert route.called
+    assert route.calls.last.request.url.params == httpx.QueryParams()
+
+
+@respx.mock
+def test_single_upload_sends_derived_glob() -> None:
+    route = respx.post("https://p.test/semesters/sem1/ingest:gradescope").mock(
+        return_value=httpx.Response(202, json={"job_id": "j1"})
+    )
+    client = ProvenanceClient(httpx.Client())
+    client.ingest_gradescope_export(
+        "https://p.test", "tok", "sem1", b"zip", scope=IngestScope("proj2")
+    )
+    params = route.calls.last.request.url.params
+    assert params["scope_mode"] == "repo_scoped"
+    assert params["scope_path_glob"] == "proj2/**"
+    assert params["scope_on_multiple"] == "ingest_all"
+
+
+@respx.mock
+def test_single_upload_sends_explicit_glob() -> None:
+    route = respx.post("https://p.test/semesters/sem1/ingest:gradescope").mock(
+        return_value=httpx.Response(202, json={"job_id": "j1"})
+    )
+    client = ProvenanceClient(httpx.Client())
+    client.ingest_gradescope_export(
+        "https://p.test", "tok", "sem1", b"zip", scope=IngestScope("proj2", "src/proj2/**")
+    )
+    assert route.calls.last.request.url.params["scope_path_glob"] == "src/proj2/**"
+
+
+@respx.mock
+def test_chunked_upload_sends_scope_on_complete() -> None:
+    """The monorepo exports that need scoping are exactly the ones big enough
+    to take the chunked path, so this is the branch that actually matters."""
+    import json as _json
+
+    respx.post("https://p.test/semesters/sem1/ingest/uploads").mock(
+        return_value=httpx.Response(
+            201,
+            json={
+                "upload_id": "u1",
+                "s3_upload_id": "s3-1",
+                "chunk_size": 4,
+                "total_parts": 2,
+            },
+        )
+    )
+    respx.put(url__regex=r".*/parts/\d+").mock(return_value=httpx.Response(200))
+    complete = respx.post("https://p.test/semesters/sem1/ingest/uploads/u1/complete").mock(
+        return_value=httpx.Response(202, json={"job_id": "j1"})
+    )
+
+    client = ProvenanceClient(httpx.Client(), chunk_threshold_bytes=4, chunk_size_bytes=4)
+    client.ingest_gradescope_export(
+        "https://p.test", "tok", "sem1", b"12345678", scope=IngestScope("proj2")
+    )
+
+    body = _json.loads(complete.calls.last.request.content)
+    assert body["s3_upload_id"] == "s3-1"
+    assert body["ingest_scope"] == {
+        "mode": "repo_scoped",
+        "path_glob": "proj2/**",
+        "on_multiple": "ingest_all",
+    }
+
+
+@respx.mock
+def test_chunked_upload_omits_ingest_scope_when_unmapped() -> None:
+    import json as _json
+
+    respx.post("https://p.test/semesters/sem1/ingest/uploads").mock(
+        return_value=httpx.Response(
+            201,
+            json={
+                "upload_id": "u1",
+                "s3_upload_id": "s3-1",
+                "chunk_size": 4,
+                "total_parts": 2,
+            },
+        )
+    )
+    respx.put(url__regex=r".*/parts/\d+").mock(return_value=httpx.Response(200))
+    complete = respx.post("https://p.test/semesters/sem1/ingest/uploads/u1/complete").mock(
+        return_value=httpx.Response(202, json={"job_id": "j1"})
+    )
+
+    client = ProvenanceClient(httpx.Client(), chunk_threshold_bytes=4, chunk_size_bytes=4)
+    client.ingest_gradescope_export("https://p.test", "tok", "sem1", b"12345678")
+
+    body = _json.loads(complete.calls.last.request.content)
+    assert "ingest_scope" not in body
