@@ -13,3 +13,11 @@ def test_connect_is_idempotent() -> None:
     from provgate.store.db import SCHEMA_SQL
 
     conn.executescript(SCHEMA_SQL)
+
+
+def test_assignment_scopes_table_exists() -> None:
+    conn = connect(":memory:")
+    rows = conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='assignment_scopes'"
+    ).fetchall()
+    assert len(rows) == 1

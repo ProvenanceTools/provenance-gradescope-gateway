@@ -63,6 +63,10 @@ def render_summary(
             if breakdown:
                 line += f"  ({breakdown})"
         lines.append(line)
+        for o in outcomes:
+            if o.skipped_counts:
+                detail = ", ".join(f"{reason}={count}" for reason, count in o.skipped_counts)
+                lines.append(f"    skipped scopes: {detail}")
 
     fail_word = "class" if failed_classes == 1 else "classes"
     lines.append(

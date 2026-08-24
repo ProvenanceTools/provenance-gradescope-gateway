@@ -11,7 +11,8 @@ from provgate.config import load_settings
 from provgate.notify.render import render_summary
 from provgate.notify.webhook import post_summary
 from provgate.store.crypto import generate_key
-from provgate.store.models import AssignmentPolicy, SecretKind
+from provgate.store.models import AssignmentPolicy, ClassConfig, IngestScope, SecretKind
+from provgate.store.repository import Repository
 from provgate.sync.engine import sync_all, sync_class
 from provgate.sync.loop import run_loop
 from provgate.sync.policy import resolve_assignments
@@ -21,6 +22,15 @@ from .wiring import open_repo, real_gs_login, real_prov, utc_now_iso
 app = typer.Typer(help="Sync Gradescope submissions into Provenance.")
 class_app = typer.Typer(help="Manage class configurations.")
 app.add_typer(class_app, name="class")
+scope_app = typer.Typer(help="Per-assignment ingest scoping for monorepo submissions.")
+app.add_typer(scope_app, name="assignment-scope")
+
+
+def _require_class(repo: Repository, label: str) -> ClassConfig:
+    cfg = repo.get_class(label)
+    if cfg is None:
+        raise typer.BadParameter(f"no such class: {label!r}")
+    return cfg
 
 
 @app.command()
@@ -214,3 +224,56 @@ def runs(limit: int = typer.Option(20)) -> None:
         typer.echo(
             f"{r.finished_at}\tclass={r.class_id}\t{r.gs_assignment_id}\t{r.outcome}\tdelta={r.delta_count}"
         )
+
+
+@scope_app.command("set")
+def scope_set(
+    class_: str = typer.Option(..., "--class"),
+    gs_assignment: str = typer.Option(..., "--gs-assignment"),
+    assignment_id: str = typer.Option(
+        ..., "--assignment-id", help="Provenance assignment id, e.g. proj2"
+    ),
+    path_glob: str | None = typer.Option(
+        None,
+        "--path-glob",
+        help="Override the derived '<assignment-id>/**' glob (for nested layouts).",
+    ),
+) -> None:
+    """Ingest only one assignment subdirectory from this Gradescope assignment's exports."""
+    repo = open_repo(load_settings())
+    cfg = _require_class(repo, class_)
+    repo.set_assignment_scope(
+        cfg.id,
+        gs_assignment,
+        provenance_assignment_id=assignment_id,
+        path_glob=path_glob,
+    )
+    scope = IngestScope(assignment_id, path_glob)
+    typer.echo(f"scoped gs assignment {gs_assignment} -> {scope.effective_glob()}")
+
+
+@scope_app.command("list")
+def scope_list(class_: str = typer.Option(..., "--class")) -> None:
+    repo = open_repo(load_settings())
+    cfg = _require_class(repo, class_)
+    scopes = repo.list_assignment_scopes(cfg.id)
+    if not scopes:
+        typer.echo("no assignment scopes configured (every export ingests every sealed scope)")
+        return
+    for gs_assignment_id, scope in scopes:
+        derived = "" if scope.path_glob else " (derived)"
+        typer.echo(
+            f"{gs_assignment_id}\t{scope.provenance_assignment_id}"
+            f"\t{scope.effective_glob()}{derived}"
+        )
+
+
+@scope_app.command("unset")
+def scope_unset(
+    class_: str = typer.Option(..., "--class"),
+    gs_assignment: str = typer.Option(..., "--gs-assignment"),
+) -> None:
+    repo = open_repo(load_settings())
+    cfg = _require_class(repo, class_)
+    repo.delete_assignment_scope(cfg.id, gs_assignment)
+    typer.echo(f"unscoped gs assignment {gs_assignment}")

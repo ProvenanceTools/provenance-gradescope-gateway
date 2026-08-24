@@ -194,3 +194,80 @@ def test_sync_no_webhook_when_url_unset(tmp_path, monkeypatch) -> None:
     result = runner.invoke(app, ["sync", "--all"])
     assert result.exit_code == 0, result.stdout
     assert not route.called
+
+
+def test_assignment_scope_set_list_unset(tmp_path, monkeypatch) -> None:
+    from provgate.store.crypto import generate_key
+
+    monkeypatch.setenv("PROVGATE_DB_PATH", str(tmp_path / "p.db"))
+    monkeypatch.setenv("PROVGATE_SECRET_KEY", generate_key())
+    add = runner.invoke(
+        app,
+        [
+            "class",
+            "add",
+            "--label",
+            "cs61b",
+            "--gradescope-course",
+            "180852",
+            "--gradescope-email",
+            "staff@example.edu",
+            "--provenance-base-url",
+            "https://prov/api/v1",
+            "--provenance-semester",
+            "sem-1",
+            "--assignments",
+            "all",
+        ],
+        input="gs-password\nprov-token\n",
+    )
+    assert add.exit_code == 0, add.stdout
+
+    result = runner.invoke(
+        app,
+        [
+            "assignment-scope",
+            "set",
+            "--class",
+            "cs61b",
+            "--gs-assignment",
+            "872677",
+            "--assignment-id",
+            "proj2",
+        ],
+    )
+    assert result.exit_code == 0
+
+    result = runner.invoke(app, ["assignment-scope", "list", "--class", "cs61b"])
+    assert result.exit_code == 0
+    assert "872677" in result.stdout
+    assert "proj2/**" in result.stdout
+
+    result = runner.invoke(
+        app, ["assignment-scope", "unset", "--class", "cs61b", "--gs-assignment", "872677"]
+    )
+    assert result.exit_code == 0
+
+    result = runner.invoke(app, ["assignment-scope", "list", "--class", "cs61b"])
+    assert "872677" not in result.stdout
+
+
+def test_assignment_scope_set_rejects_unknown_class(tmp_path, monkeypatch) -> None:
+    from provgate.store.crypto import generate_key
+
+    monkeypatch.setenv("PROVGATE_DB_PATH", str(tmp_path / "p.db"))
+    monkeypatch.setenv("PROVGATE_SECRET_KEY", generate_key())
+    result = runner.invoke(
+        app,
+        [
+            "assignment-scope",
+            "set",
+            "--class",
+            "nope",
+            "--gs-assignment",
+            "1",
+            "--assignment-id",
+            "proj2",
+        ],
+    )
+    assert result.exit_code != 0

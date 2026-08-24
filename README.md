@@ -78,6 +78,30 @@ Assignment scope per class:
 
 Manage classes with `provgate class list`, `provgate class edit <label>`, and `provgate class remove <label>`.
 
+### Monorepo submissions: ingesting one assignment directory
+
+Some courses keep every assignment in one repo and push the whole repo to
+Gradescope at each submission. Point provgate at the directory that matters:
+
+```bash
+provgate assignment-scope set \
+    --class cs61b-fa26 \
+    --gs-assignment 409194023 \
+    --assignment-id proj2
+```
+
+That derives the glob `proj2/**` and sends it with every ingest for that
+Gradescope assignment, so `lab5/`, `proj1/` and the rest of the repo are not
+ingested as extra submissions.
+
+The derived glob matches a directory at the **repo root**. If the course nests
+assignments (`src/proj2/`), pass `--path-glob 'src/proj2/**'` explicitly — the
+glob grammar has no brace expansion, so no single pattern covers both layouts.
+
+Assignments with no scope row are unaffected: they ingest exactly as before.
+Watch the run summary's `skipped scopes:` line — `scope_excluded=<everything>`
+with zero ingested means the glob did not match the layout.
+
 ## Verify a class
 
 The Gradescope side speaks an undocumented, changing API. Before relying on a class in production, confirm its credentials and that `provgate` can see the course:

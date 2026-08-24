@@ -8,6 +8,8 @@ from dataclasses import dataclass
 
 import httpx
 
+from provgate.store.models import IngestScope
+
 _TERMINAL = {"succeeded", "partial", "failed"}
 _SUCCESS = {"succeeded", "partial"}
 
@@ -34,6 +36,30 @@ class JobStatus:
     def is_success(self) -> bool:
         return self.status in _SUCCESS
 
+    @property
+    def skipped_counts(self) -> tuple[tuple[str, int], ...]:
+        """Excluded/failed scopes from this ingest, aggregated reason -> count.
+
+        The server reports `skipped: null` to mean "not known yet" and `[]` to
+        mean "resolution ran and skipped nothing". Both collapse to `()` here:
+        the distinction matters to a polling client, and `poll_job` only ever
+        returns a TERMINAL status, by which point `null` is not expected.
+
+        Anything malformed is ignored rather than raising — a summary line must
+        never be the thing that fails a sync that otherwise succeeded.
+        """
+        raw_skipped = self.raw.get("skipped")
+        if not isinstance(raw_skipped, list):
+            return ()
+        counts: dict[str, int] = {}
+        for entry in raw_skipped:
+            if not isinstance(entry, dict):
+                continue
+            reason = entry.get("reason")
+            if isinstance(reason, str):
+                counts[reason] = counts.get(reason, 0) + 1
+        return tuple(sorted(counts.items()))
+
 
 @dataclass(frozen=True)
 class _ResumableUpload:
@@ -41,6 +67,24 @@ class _ResumableUpload:
     s3_upload_id: str
     chunk_size: int
     total_parts: int
+
+
+def _scope_query_params(scope: IngestScope) -> dict[str, str]:
+    """Flat query form, for the multipart routes whose body is the archive."""
+    return {
+        "scope_mode": "repo_scoped",
+        "scope_path_glob": scope.effective_glob(),
+        "scope_on_multiple": "ingest_all",
+    }
+
+
+def _scope_json_object(scope: IngestScope) -> dict[str, str]:
+    """Nested object form, for the JSON-bodied resumable-upload complete call."""
+    return {
+        "mode": "repo_scoped",
+        "path_glob": scope.effective_glob(),
+        "on_multiple": "ingest_all",
+    }
 
 
 class ProvenanceClient:
@@ -70,14 +114,25 @@ class ProvenanceClient:
         return {"Authorization": f"Bearer {token}"}
 
     def ingest_gradescope_export(
-        self, base_url: str, token: str, semester_id: str, zip_bytes: bytes
+        self,
+        base_url: str,
+        token: str,
+        semester_id: str,
+        zip_bytes: bytes,
+        *,
+        scope: IngestScope | None = None,
     ) -> JobHandle:
         if len(zip_bytes) < self._chunk_threshold_bytes:
-            return self._ingest_single(base_url, token, semester_id, zip_bytes)
-        return self._ingest_chunked(base_url, token, semester_id, zip_bytes)
+            return self._ingest_single(base_url, token, semester_id, zip_bytes, scope)
+        return self._ingest_chunked(base_url, token, semester_id, zip_bytes, scope)
 
     def _ingest_single(
-        self, base_url: str, token: str, semester_id: str, zip_bytes: bytes
+        self,
+        base_url: str,
+        token: str,
+        semester_id: str,
+        zip_bytes: bytes,
+        scope: IngestScope | None = None,
     ) -> JobHandle:
         url = f"{base_url}/semesters/{semester_id}/ingest:gradescope"
         try:
@@ -85,6 +140,7 @@ class ProvenanceClient:
                 url,
                 headers=self._auth(token),
                 files={"archive": ("export.zip", zip_bytes, "application/zip")},
+                params=_scope_query_params(scope) if scope is not None else None,
             )
         except httpx.HTTPError as e:
             raise ProvenanceError(f"ingest request failed: {e}") from e
@@ -100,7 +156,12 @@ class ProvenanceClient:
         return JobHandle(job_id=str(job_id))
 
     def _ingest_chunked(
-        self, base_url: str, token: str, semester_id: str, zip_bytes: bytes
+        self,
+        base_url: str,
+        token: str,
+        semester_id: str,
+        zip_bytes: bytes,
+        scope: IngestScope | None = None,
     ) -> JobHandle:
         upload = self._create_upload(base_url, token, semester_id, len(zip_bytes))
         try:
@@ -118,7 +179,7 @@ class ProvenanceClient:
                     zip_bytes[start:end],
                 )
             return self._complete_upload(
-                base_url, token, semester_id, upload.upload_id, upload.s3_upload_id
+                base_url, token, semester_id, upload.upload_id, upload.s3_upload_id, scope
             )
         except ProvenanceError:
             # Best-effort cleanup so no orphaned S3 multipart parts linger. The
@@ -187,13 +248,20 @@ class ProvenanceClient:
         raise ProvenanceError(last_error)
 
     def _complete_upload(
-        self, base_url: str, token: str, semester_id: str, upload_id: str, s3_upload_id: str
+        self,
+        base_url: str,
+        token: str,
+        semester_id: str,
+        upload_id: str,
+        s3_upload_id: str,
+        scope: IngestScope | None = None,
     ) -> JobHandle:
         url = f"{base_url}/semesters/{semester_id}/ingest/uploads/{upload_id}/complete"
+        body: dict[str, object] = {"s3_upload_id": s3_upload_id}
+        if scope is not None:
+            body["ingest_scope"] = _scope_json_object(scope)
         try:
-            resp = self._http.post(
-                url, headers=self._auth(token), json={"s3_upload_id": s3_upload_id}
-            )
+            resp = self._http.post(url, headers=self._auth(token), json=body)
         except httpx.HTTPError as e:
             raise ProvenanceError(f"complete upload failed: {e}") from e
         if resp.status_code != 202:

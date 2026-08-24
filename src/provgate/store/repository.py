@@ -6,7 +6,7 @@ import sqlite3
 from collections.abc import Iterable
 
 from .crypto import SecretBox
-from .models import AssignmentPolicy, ClassConfig, RunRecord, SecretKind
+from .models import AssignmentPolicy, ClassConfig, IngestScope, RunRecord, SecretKind
 
 
 def _row_to_class(row: sqlite3.Row) -> ClassConfig:
@@ -202,3 +202,66 @@ class Repository:
             )
             for r in rows
         ]
+
+    # --- assignment scopes ---------------------------------------------------
+    def set_assignment_scope(
+        self,
+        class_id: int,
+        gs_assignment_id: str,
+        *,
+        provenance_assignment_id: str,
+        path_glob: str | None = None,
+    ) -> None:
+        self._conn.execute(
+            """
+            INSERT INTO assignment_scopes
+                (class_id, gs_assignment_id, provenance_assignment_id, path_glob)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(class_id, gs_assignment_id) DO UPDATE SET
+                provenance_assignment_id = excluded.provenance_assignment_id,
+                path_glob = excluded.path_glob
+            """,
+            (class_id, gs_assignment_id, provenance_assignment_id, path_glob),
+        )
+        self._conn.commit()
+
+    def get_assignment_scope(self, class_id: int, gs_assignment_id: str) -> IngestScope | None:
+        row = self._conn.execute(
+            """
+            SELECT provenance_assignment_id, path_glob FROM assignment_scopes
+            WHERE class_id = ? AND gs_assignment_id = ?
+            """,
+            (class_id, gs_assignment_id),
+        ).fetchone()
+        if row is None:
+            return None
+        return IngestScope(
+            provenance_assignment_id=row["provenance_assignment_id"],
+            path_glob=row["path_glob"],
+        )
+
+    def list_assignment_scopes(self, class_id: int) -> list[tuple[str, IngestScope]]:
+        rows = self._conn.execute(
+            """
+            SELECT gs_assignment_id, provenance_assignment_id, path_glob
+            FROM assignment_scopes WHERE class_id = ? ORDER BY gs_assignment_id
+            """,
+            (class_id,),
+        )
+        return [
+            (
+                r["gs_assignment_id"],
+                IngestScope(
+                    provenance_assignment_id=r["provenance_assignment_id"],
+                    path_glob=r["path_glob"],
+                ),
+            )
+            for r in rows
+        ]
+
+    def delete_assignment_scope(self, class_id: int, gs_assignment_id: str) -> None:
+        self._conn.execute(
+            "DELETE FROM assignment_scopes WHERE class_id = ? AND gs_assignment_id = ?",
+            (class_id, gs_assignment_id),
+        )
+        self._conn.commit()

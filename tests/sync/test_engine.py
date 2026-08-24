@@ -8,7 +8,7 @@ from provgate.gradescope.parse import Assignment
 from provgate.provenance.client import JobHandle, JobStatus
 from provgate.store.crypto import SecretBox, generate_key
 from provgate.store.db import connect
-from provgate.store.models import AssignmentPolicy, PolicyKind, SecretKind
+from provgate.store.models import AssignmentPolicy, IngestScope, PolicyKind, SecretKind
 from provgate.store.repository import Repository
 from provgate.sync.engine import sync_all, sync_class
 from tests.support.export_fixture import make_export
@@ -54,16 +54,27 @@ class FakeGs:
 
 
 class FakeProv:
-    def __init__(self, status: str = "succeeded") -> None:
+    def __init__(self, status: str = "succeeded", skipped: list[dict[str, str]] | None = None):
         self.status = status
+        self.skipped = skipped
         self.ingested: list[bytes] = []
+        self.scopes: list[IngestScope | None] = []
 
-    def ingest_gradescope_export(self, base_url, token, semester_id, zip_bytes) -> JobHandle:
+    def ingest_gradescope_export(
+        self,
+        base_url: str,
+        token: str,
+        semester_id: str,
+        zip_bytes: bytes,
+        *,
+        scope: IngestScope | None = None,
+    ) -> JobHandle:
         self.ingested.append(zip_bytes)
+        self.scopes.append(scope)
         return JobHandle("job-1")
 
-    def poll_job(self, base_url, token, semester_id, job_id) -> JobStatus:
-        return JobStatus(self.status, {"status": self.status})
+    def poll_job(self, base_url: str, token: str, semester_id: str, job_id: str) -> JobStatus:
+        return JobStatus(self.status, {"status": self.status, "skipped": self.skipped})
 
 
 def test_success_advances_watermark_and_forwards_delta_only() -> None:
@@ -194,3 +205,42 @@ def test_sync_all_isolates_class_login_failure_from_sibling_class() -> None:
     assert set(results.keys()) == {"a", "b"}
     assert results["a"][0].outcome == "error"
     assert results["b"][0].outcome == "succeeded"
+
+
+def test_unmapped_assignment_sends_no_scope() -> None:
+    # The safety property: a class that never configured scoping is untouched.
+    repo, cid = seed()
+    export = make_export({"submission_1": {"sid": "s1", "files": {"manifest.json": b"a"}}})
+    prov = FakeProv("succeeded")
+    login = lambda email, pw: FakeGs(export)  # noqa: E731
+
+    sync_class(repo, login, prov, repo.get_class("a"), now_iso=NOW)
+    assert prov.scopes == [None]
+
+
+def test_mapped_assignment_sends_its_scope() -> None:
+    repo, cid = seed()
+    export = make_export({"submission_1": {"sid": "s1", "files": {"manifest.json": b"a"}}})
+    prov = FakeProv("succeeded")
+    login = lambda email, pw: FakeGs(export)  # noqa: E731
+
+    repo.set_assignment_scope(cid, "2", provenance_assignment_id="proj2")
+    sync_class(repo, login, prov, repo.get_class("a"), now_iso=NOW)
+    assert prov.scopes == [IngestScope("proj2", None)]
+
+
+def test_skipped_counts_reach_the_outcome() -> None:
+    repo, cid = seed()
+    export = make_export({"submission_1": {"sid": "s1", "files": {"manifest.json": b"a"}}})
+    prov = FakeProv(
+        "succeeded",
+        skipped=[
+            {"reason": "scope_excluded"},
+            {"reason": "scope_excluded"},
+        ],
+    )
+    login = lambda email, pw: FakeGs(export)  # noqa: E731
+
+    repo.set_assignment_scope(cid, "2", provenance_assignment_id="proj2")
+    outcomes = sync_class(repo, login, prov, repo.get_class("a"), now_iso=NOW)
+    assert outcomes[0].skipped_counts == (("scope_excluded", 2),)

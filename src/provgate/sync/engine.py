@@ -9,7 +9,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 
-from provgate.store.models import ClassConfig, RunRecord, SecretKind
+from provgate.store.models import ClassConfig, IngestScope, RunRecord, SecretKind
 from provgate.store.repository import Repository
 
 from .policy import resolve_assignments
@@ -25,6 +25,7 @@ class AssignmentOutcome:
     total_submissions: int
     job_id: str | None
     error: str | None
+    skipped_counts: tuple[tuple[str, int], ...] = ()
 
 
 def _record(
@@ -71,8 +72,13 @@ def _sync_assignment(
         _record(repo, cfg, out, started, now_iso())
         return out
 
+    scope: IngestScope | None = repo.get_assignment_scope(cfg.id, aid)
     handle = prov.ingest_gradescope_export(
-        cfg.provenance_base_url, token, cfg.provenance_semester_id, pruned.zip_bytes
+        cfg.provenance_base_url,
+        token,
+        cfg.provenance_semester_id,
+        pruned.zip_bytes,
+        scope=scope,
     )
     status = prov.poll_job(
         cfg.provenance_base_url, token, cfg.provenance_semester_id, handle.job_id
@@ -80,7 +86,13 @@ def _sync_assignment(
     if status.is_success:
         repo.mark_forwarded(cfg.id, aid, pruned.forwarded_keys, handle.job_id, now_iso())
         out = AssignmentOutcome(
-            aid, status.status, delta, pruned.total_submissions, handle.job_id, None
+            aid,
+            status.status,
+            delta,
+            pruned.total_submissions,
+            handle.job_id,
+            None,
+            status.skipped_counts,
         )
     else:
         out = AssignmentOutcome(
@@ -90,6 +102,7 @@ def _sync_assignment(
             pruned.total_submissions,
             handle.job_id,
             f"job status {status.status}",
+            status.skipped_counts,
         )
     _record(repo, cfg, out, started, now_iso())
     return out

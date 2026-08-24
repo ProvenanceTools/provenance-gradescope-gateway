@@ -72,3 +72,39 @@ def test_classes_sorted_for_determinism() -> None:
     }
     out = render_summary(results, now_iso=NOW)
     assert out.index("alpha") < out.index("zeta")
+
+
+def test_summary_reports_scope_skips() -> None:
+    outcomes = {
+        "cs61b": [
+            AssignmentOutcome(
+                gs_assignment_id="872677",
+                outcome="succeeded",
+                delta_count=0,
+                total_submissions=300,
+                job_id="job-1",
+                error=None,
+                skipped_counts=(("scope_excluded", 300),),
+            )
+        ]
+    }
+    out = render_summary(outcomes, now_iso="2026-08-24T00:00:00Z")
+    assert "scope_excluded=300" in out
+
+
+def test_summary_omits_the_skip_line_when_nothing_was_skipped() -> None:
+    outcomes = {
+        "cs61b": [
+            AssignmentOutcome(
+                gs_assignment_id="872677",
+                outcome="succeeded",
+                delta_count=5,
+                total_submissions=5,
+                job_id="job-1",
+                error=None,
+            )
+        ]
+    }
+    out = render_summary(outcomes, now_iso="2026-08-24T00:00:00Z")
+    assert "scope_excluded" not in out
+    assert "skipped scopes" not in out
