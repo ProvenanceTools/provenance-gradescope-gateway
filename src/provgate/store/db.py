@@ -44,6 +44,14 @@ CREATE TABLE IF NOT EXISTS runs (
     started_at TEXT NOT NULL,
     finished_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS assignment_scopes (
+    class_id INTEGER NOT NULL REFERENCES classes(id) ON DELETE CASCADE,
+    gs_assignment_id TEXT NOT NULL,
+    provenance_assignment_id TEXT NOT NULL,
+    path_glob TEXT,
+    PRIMARY KEY (class_id, gs_assignment_id)
+);
 """
 
 

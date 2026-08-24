@@ -63,3 +63,24 @@ class RunRecord:
     error_summary: str | None
     started_at: str
     finished_at: str
+
+
+@dataclass(frozen=True)
+class IngestScope:
+    """Which assignment subdirectory of a monorepo submission to ingest.
+
+    `path_glob` is an escape hatch for layouts where the directory name is not
+    the assignment id (e.g. `src/proj2/`). When it is None the glob is derived
+    as `<provenance_assignment_id>/**`, which matches a directory at the repo
+    root and nothing else.
+
+    Deliberately NOT `**<id>/**`: that also matches `myproj2/` and `notproj2/`.
+    See the design spec §4.4 — the glob grammar has no brace expansion, so no
+    single derived glob covers both root-level and nested layouts.
+    """
+
+    provenance_assignment_id: str
+    path_glob: str | None = None
+
+    def effective_glob(self) -> str:
+        return self.path_glob or f"{self.provenance_assignment_id}/**"
