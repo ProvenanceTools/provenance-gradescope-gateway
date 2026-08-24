@@ -47,14 +47,14 @@ frontends:   provgate/cli/        (later: provgate/web/)
 core:        provgate/sync/       orchestration: per class → per assignment → delta → POST → poll
              ├── provgate/gradescope/   authenticated client: login, list assignments, download export
              ├── provgate/provenance/   API client: ingest:gradescope, poll job
-             ├── provgate/store/        SQLite repository: classes, secrets, watermarks, run log
+             ├── provgate/store/        SQLite repository: classes, secrets, watermarks, assignment scopes, run log
              ├── provgate/notify/       pure render_summary + best-effort post_summary (webhook)
              └── provgate/config.py     settings: store path, master key, timeouts, base URLs
 ```
 
 - **`provgate/gradescope/` is the only module that knows Gradescope exists.** All undocumented-API fragility is quarantined here: login, session/CSRF handling, assignment listing, and export download. It exposes a small typed interface (`list_assignments`, `download_export`) to the rest of the app. The client is hand-rolled on `httpx` (we do **not** depend on `gradescopeapi`); nothing outside this package constructs a Gradescope URL or touches its session/HTML. When Gradescope breaks, exactly one package changes.
 - **`provgate/provenance/` is the only module that knows Provenance's HTTP shape.** It exposes `ingest_gradescope_export(...) -> JobHandle` and `poll_job(...) -> JobStatus`. It never reaches into Provenance internals; it only calls the three public behaviors above.
-- **`provgate/store/` is pure persistence.** It owns the SQLite connection and is the only place SQL is written. It exposes a repository interface (classes, secrets, watermarks, runs). No business logic, no HTTP, no Gradescope/Provenance types leaking in.
+- **`provgate/store/` is pure persistence.** It owns the SQLite connection and is the only place SQL is written. It exposes a repository interface (classes, secrets, watermarks, assignment scopes, runs) — `assignment_scopes` maps a (class, Gradescope assignment) pair to the `provenance_assignment_id` (+ optional `path_glob`) used to scope a monorepo ingest to one subdirectory. No business logic, no HTTP, no Gradescope/Provenance types leaking in.
 - **`provgate/sync/` is orchestration only.** It receives the two clients and the store via constructor/params (dependency injection) so it can be unit-tested against fakes. It contains the delta computation and ZIP pruning — the heart of the app — as **pure functions** operating on in-memory bytes, separate from any I/O.
 - **`provgate/cli/` is a thin frontend.** It parses args, prompts for secrets, and calls core. No sync logic lives here. A `web/` frontend added later must reuse `store` + `sync` unchanged.
 - Secrets (Gradescope passwords, Provenance tokens) are **encrypted at rest** in the store (Fernet; master key from `PROVGATE_SECRET_KEY`). Plaintext secrets exist only transiently in memory during a sync. There is exactly one encrypt/decrypt seam and it lives in `store`.
