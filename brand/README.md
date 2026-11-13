@@ -2,7 +2,7 @@
 
 `provgate` is a companion tool to [Provenance](https://github.com/ProvenanceTools/provenance), so
 its mark deliberately borrows Provenance's visual language: the same rounded-square
-**chain link** (chain-of-custody) and the same ink + orange palette. The difference is the
+**chain link** (chain-of-custody) and the same Berkeley Blue + California Gold palette. The difference is the
 **submission arrow** threading through the link — `provgate` is the *gateway* that passes new
 Gradescope submissions into the Provenance chain. The tail passes behind the link on the
 left; the arrow exits in front on the right.
@@ -11,10 +11,14 @@ left; the arrow exits in front on the right.
 
 | Token      | Light surface | Dark surface |
 | ---------- | ------------- | ------------ |
-| Ink / line | `#18181b`     | `#fafafa`    |
-| Accent     | `#EA580C`     | `#F97316`    |
+| Ink / line | `#002676`     | `#FFFFFF`    |
+| Accent     | `#FDB515`     | `#FDB515`    |
 
-Same tokens as Provenance; the accent brightens on dark surfaces for contrast.
+Same tokens as Provenance: UC Berkeley's Berkeley Blue and California Gold (the
+monorepo's issue #36 replaced the original `#18181b` ink and `#EA580C` orange accent).
+Gold is only 1.78:1 on white, so in the light diagram it marks only shapes (the gateway
+rail, the outbound arrow, the step-4 dot). Text that used the accent there is Berkeley
+Blue, and the numeral on the gold dot is blue rather than white.
 
 The wordmark is set in the Tailwind default system-sans stack at weight 700, matching the
 Provenance wordmark.
